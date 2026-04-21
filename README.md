@@ -210,3 +210,44 @@ fn handle_connection(mut stream: TcpStream) {
 ```
 
 You can clearly see the duplicated code between the two branches. They only differ in the status line and filename passed to `read_to_string()`, and in the refactor we reduced the conditonal into just these two.
+
+## Reflection 4
+
+Our `handle_connection` function:
+
+```rs
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = BufReader::new(&stream);
+    let request_line = buf_reader.lines().next().unwrap().unwrap();
+
+    let (status_line, filename) = match &request_line[..] {
+        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
+        "GET /sleep HTTP/1.1" => {
+            thread::sleep(Duration::from_secs(5));
+            ("HTTP/1.1 200 OK", "hello.html")
+        }
+        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    };
+
+    let contents = fs::read_to_string(filename).unwrap();
+    let length = contents.len();
+
+    let response =
+        format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+
+    stream.write_all(response.as_bytes()).unwrap();
+}
+```
+
+As the tutorial states, we switch from an if-else to a match block for cleaner syntax. Let's focus on the second arm, which is where we added our new logic:
+
+```rs
+        "GET /sleep HTTP/1.1" => {
+            thread::sleep(Duration::from_secs(5));
+            ("HTTP/1.1 200 OK", "hello.html")
+        }
+```
+
+In Rust, code blocks evaluate to the value of the last expression on it, in this case `("HTTP/1.1 200 OK", "hello.html")`. So this match arm actually has the same output as the first arm. However, before returning the tuple, we first call `thread::sleep()` to pause execution for 5 seconds in order to simulate a slow request.
+
+When we access `localhost:7878/sleep` in our browser, this match arm gets triggered, causing the application to pause for 5 seconds. During this pause, the app won't do anything, not even reading other connections. Only after this pause does the app finally send a response to the request. This is why when we open another tab, it has to "load" for a few seconds; it's waiting for the app to stop sleeping so it can send a response to the previous request.
