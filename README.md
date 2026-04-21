@@ -54,3 +54,7 @@ That's four chained method calls:
 ```
 
 After obtaining `http_request`, we just pretty-print it to the terminal. The `#?` format specifier tells the `println!` macro to debug-print the contents of `http_request`, but also add line breaks and indentations to make the result more readable. If we just want a simple debug print (without line breaks or indentations), we'd use `?` instead.
+
+## Reflection 2
+
+![Commit 2 screen capture](/commit2.png)
