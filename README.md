@@ -251,3 +251,169 @@ As the tutorial states, we switch from an if-else to a match block for cleaner s
 In Rust, code blocks evaluate to the value of the last expression on it, in this case `("HTTP/1.1 200 OK", "hello.html")`. So this match arm actually has the same output as the first arm. However, before returning the tuple, we first call `thread::sleep()` to pause execution for 5 seconds in order to simulate a slow request.
 
 When we access `localhost:7878/sleep` in our browser, this match arm gets triggered, causing the application to pause for 5 seconds. During this pause, the app won't do anything, not even reading other connections. Only after this pause does the app finally send a response to the request. This is why when we open another tab, it has to "load" for a few seconds; it's waiting for the app to stop sleeping so it can send a response to the previous request.
+
+## Reflection 5
+
+A lot of things changed. For one, we now have a `src/lib.rs` file.
+
+Here are the contents of `src/lib.rs`:
+
+```rs
+use std::{sync::{Arc, Mutex, mpsc}, thread};
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl ThreadPool {
+    pub fn new(size: usize) -> Self {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        Self { workers, sender }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }
+}
+
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+
+                println!("Worker {id} got a job; executing.");
+
+                job();
+            }
+        });
+
+        Self { id, thread }
+    }
+}
+```
+
+In the tutorial, we want to make our server multithreaded by way of a thread pool. So we first define a `ThreadPool` struct:
+
+```rs
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+```
+
+Our `ThreadPool` has two fields: `workers`, which is a list of the `ThreadPool`'s workers, and `sender`, which the `ThreadPool` will use to send messages to its workers.
+
+`thread::spawn()` accepts closures of type `FnOnce() + Send + 'static`. `Job` is just a type alias for this kind of closure wrapped in a `Box`.
+
+Now let's look at its functions:
+
+```rs
+impl ThreadPool {
+    pub fn new(size: usize) -> Self {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        Self { workers, sender }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }
+}
+```
+
+We have a `new()` associated function for creating a `ThreadPool` instance. It accepts one argument, which is the amount of workers we want our `ThreadPool` to have. We use the `assert!` macro to crash our program if we pass in zero as the argument. Next we obtain a sender-receiver pair using `mpsc::channel()`. Then, we define our list of workers, and populate it with workers. We make sure to pass the receiver to each worker. Note that we have to wrap the receiver clones in a `Mutex` to synchronize access across multiple workers. Finally, we put the sender and the list of workers in our `ThreadPool`.
+
+The `execute()` method is what we use to pass a job to the `ThreadPool`. The `ThreadPool` will pass the job into its sender, which will in turn send it to its workers' threads' receivers.
+
+Now let's look at `Worker`:
+```rs
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+
+                println!("Worker {id} got a job; executing.");
+
+                job();
+            }
+        });
+
+        Self { id, thread }
+    }
+}
+```
+
+As noted in the tutorial, we don't use `pub` for Worker to hide its implementation from our `main()` function. We only use `pub` for `ThreadPool`.
+
+`Worker` has two fields: `id`, which is just its identifier, and `thread`, where it stores its associated thread.
+
+The `Worker::new()` factory takes two arguments: the id, as well as a receiver, as we saw above. In the factory itself, we spawn a thread, move the receiver into the thread, and immediately put the thread in an infinite loop where it would endlessly wait for jobs from the sender and execute them. Then we put the id and thread in our `Worker`.
+
+The way it works is that at the start of the loop, the thread waits to acquire a lock to the `Mutex`, wait for a job to be received, take it, and immediately release the lock. This way, no two workers will take the same job.
+
+Finally, we modify our `main()` function to use a `ThreadPool`:
+
+```rs
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    let pool = ThreadPool::new(4);
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        pool.execute(|| {
+            handle_connection(stream);
+        });
+    }
+}
+```
+
+We call the `.execute()` method to pass the job of handling TCP connections to our thread pool, which will then assign the job to its workers.
