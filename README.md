@@ -114,3 +114,7 @@ And then this line...
 Note that the `.write_all()` method can't accept a `String` directly (it takes a `&[u8]`), so we first use the `.as_bytes()` method on `response` to get a reference to the `String`'s underlying bytes. This is also a zero-copy operation, so we don't have to worry about performance. I love Rust.
 
 Also note that `.write_all()`, being a fallible IO operation returns a `Result`, so we again unwrap it, because this isn't a production-grade app.
+
+## Reflection 3
+
+![Commit 3 screen capture](/commit3.png)
